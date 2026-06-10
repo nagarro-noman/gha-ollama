@@ -1,0 +1,51 @@
+name: AI Infra Review
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: 'The Ollama model to use'
+        required: false
+        type: string
+        default: 'llama3.2'
+    secrets:
+      AI_GATEWAY_URL:
+        required: true
+
+jobs:
+  infra-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get Infra Diff
+        id: diff
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > infra.diff
+
+      - name: Request AI Infra Analysis
+        run: |
+          jq -n --arg diff "$(<infra.diff)" --arg model "${{ inputs.model }}" \
+            '{diff: $diff, model: $model}' > payload.json
+          
+          RESPONSE=$(curl -s -X POST ${{ secrets.AI_GATEWAY_URL }}/analyze-infra \
+            -H "Content-Type: application/json" \
+            -d @payload.json)
+          
+          echo "$RESPONSE" | jq -r '.analysis' > infra_analysis.md
+
+      - name: Post Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const analysis = fs.readFileSync('infra_analysis.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "### AI Infrastructure Analysis 🏗️\n\n" + analysis
+            })

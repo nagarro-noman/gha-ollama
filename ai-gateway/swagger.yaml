@@ -1,0 +1,169 @@
+openapi: 3.0.0
+info:
+  title: AI Gateway API
+  description: A centralized API gateway for Ollama-powered GitHub Actions workflows.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: Local server
+  - url: https://6cf3-2409-4090-f00d-d402-b8aa-ca5e-14f0-e51a.ngrok-free.app
+    description: Ngrok tunnel
+paths:
+  /review-pr:
+    post:
+      summary: Generate a code review
+      description: Analyzes a PR diff and provides a code review.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                diff:
+                  type: string
+                  description: The git diff content.
+                  example: |
+                    --- a/main.js
+                    +++ b/main.js
+                    @@ -1,3 +1,5 @@
+                     function add(a, b) {
+                    -  return a + b;
+                    +  console.log("Adding numbers");
+                    +  if (typeof a !== "number") return 0;
+                    +  return a + b;
+                     }
+                model:
+                  type: string
+                  default: qwen2.5-coder:7b
+                  example: qwen2.5-coder:7b
+              required:
+                - diff
+      responses:
+        '200':
+          description: Successful review
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  review:
+                    type: string
+        '400':
+          description: Missing required fields
+  /generate-release-notes:
+    post:
+      summary: Generate release notes
+      description: Summarizes commit messages into professional release notes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                commits:
+                  type: string
+                  description: Newline-separated commit messages.
+                  example: |
+                    feat: add user authentication
+                    fix: resolved memory leak in watcher
+                    chore: updated dependencies
+                model:
+                  type: string
+                  default: qwen2.5-coder:7b
+                  example: qwen2.5-coder:7b
+              required:
+                - commits
+      responses:
+        '200':
+          description: Successful generation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notes:
+                    type: string
+  /analyze-infra:
+    post:
+      summary: Analyze infrastructure changes
+      description: Reviews IaC diffs for security and best practices.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                diff:
+                  type: string
+                  description: The IaC git diff.
+                  example: |
+                    resource "aws_s3_bucket" "data" {
+                      bucket = "my-sensitive-data"
+                    -  acl    = "private"
+                    +  acl    = "public-read"
+                    }
+                model:
+                  type: string
+                  default: qwen2.5-coder:7b
+                  example: qwen2.5-coder:7b
+              required:
+                - diff
+      responses:
+        '200':
+          description: Successful analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  analysis:
+                    type: string
+  /summarize-scan:
+    post:
+      summary: Summarize security scan
+      description: Distills raw security scan results into a high-level summary.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scanResults:
+                  type: string
+                  description: Raw output from a security scanner.
+                  example: |
+                    CVE-2023-1234: High - Vulnerable package in node_modules
+                    CVE-2024-5678: Critical - SQL Injection in search query
+                model:
+                  type: string
+                  default: qwen2.5-coder:7b
+                  example: qwen2.5-coder:7b
+              required:
+                - scanResults
+      responses:
+        '200':
+          description: Successful summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: string
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string

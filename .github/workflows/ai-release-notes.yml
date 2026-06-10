@@ -1,0 +1,50 @@
+name: AI Release Notes
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: 'The Ollama model to use'
+        required: false
+        type: string
+        default: 'llama3.2'
+    secrets:
+      AI_GATEWAY_URL:
+        required: true
+
+jobs:
+  release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get Commits
+        id: commits
+        run: |
+          # Get commits since the last tag
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LATEST_TAG" ]; then
+            git log --pretty=format:"%s" > commits.txt
+          else
+            git log $LATEST_TAG..HEAD --pretty=format:"%s" > commits.txt
+          fi
+
+      - name: Request AI Release Notes
+        run: |
+          jq -n --arg commits "$(<commits.txt)" --arg model "${{ inputs.model }}" \
+            '{commits: $commits, model: $model}' > payload.json
+          
+          RESPONSE=$(curl -s -X POST ${{ secrets.AI_GATEWAY_URL }}/generate-release-notes \
+            -H "Content-Type: application/json" \
+            -d @payload.json)
+          
+          echo "$RESPONSE" | jq -r '.notes' > release_notes.md
+
+      - name: Upload Release Notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-release-notes
+          path: release_notes.md

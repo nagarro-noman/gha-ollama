@@ -1,0 +1,46 @@
+name: AI Security Scan Summary
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: 'The Ollama model to use'
+        required: false
+        type: string
+        default: 'llama3.2'
+      scan_results_path:
+        description: 'Path to the scan results file'
+        required: true
+        type: string
+    secrets:
+      AI_GATEWAY_URL:
+        required: true
+
+jobs:
+  security-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request AI Security Summary
+        run: |
+          jq -n --arg scanResults "$(<${{ inputs.scan_results_path }})" --arg model "${{ inputs.model }}" \
+            '{scanResults: $scanResults, model: $model}' > payload.json
+          
+          RESPONSE=$(curl -s -X POST ${{ secrets.AI_GATEWAY_URL }}/summarize-scan \
+            -H "Content-Type: application/json" \
+            -d @payload.json)
+          
+          echo "$RESPONSE" | jq -r '.summary' > security_summary.md
+
+      - name: Post Comment
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('security_summary.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "### AI Security Scan Summary 🛡️\n\n" + summary
+            })

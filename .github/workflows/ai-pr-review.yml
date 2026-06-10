@@ -1,0 +1,53 @@
+name: AI PR Review
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: 'The Ollama model to use'
+        required: false
+        type: string
+        default: 'llama3.2'
+    secrets:
+      AI_GATEWAY_URL:
+        required: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR Diff
+        id: diff
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > pr.diff
+          echo "diff_file=pr.diff" >> $GITHUB_OUTPUT
+
+      - name: Request AI Review
+        id: ai_request
+        run: |
+          jq -n --arg diff "$(<pr.diff)" --arg model "${{ inputs.model }}" \
+            '{diff: $diff, model: $model}' > payload.json
+          
+          RESPONSE=$(curl -s -X POST ${{ secrets.AI_GATEWAY_URL }}/review-pr \
+            -H "Content-Type: application/json" \
+            -d @payload.json)
+          
+          echo "$RESPONSE" | jq -r '.review' > review.txt
+
+      - name: Post Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const review = fs.readFileSync('review.txt', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "### AI Code Review 🤖\n\n" + review
+            })

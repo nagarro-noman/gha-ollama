@@ -1,0 +1,185 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+      - feature/provisioning-resources
+      - poc/gha-ollama
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      stacks: ${{ steps.set.outputs.stacks }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: set
+        run: |
+          echo "Branch: ${{ github.base_ref }}"
+          STACKS=$(git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            | grep '^stacks/dev/' \
+            | cut -d/ -f1-4 \
+            | sort -u \
+            | jq -R -s -c 'split("\n")[:-1]')
+          
+          echo "Detected stacks:"
+          printf '%s\n' "$STACKS"
+          echo "stacks=$STACKS" >> $GITHUB_OUTPUT
+
+  plan:
+    needs: detect
+    if: needs.detect.outputs.stacks != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        stack: ${{ fromJson(needs.detect.outputs.stacks) }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
+
+      - name: Setup Terraform Plugin Cache
+        run: |
+          mkdir -p ~/.terraform.d/plugin-cache
+          echo 'plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
+
+      - name: Cache Terraform
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/.terraform
+            ~/.terraform.d/plugin-cache
+          key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+      
+      - name: Setup OPA (Conftest)
+        run: |
+          CONFTEST_VERSION=0.66.0
+          wget https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz
+          tar -xzf conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz
+          sudo mv conftest /usr/local/bin/
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ${{ matrix.stack }}
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+        working-directory: ${{ matrix.stack }}
+
+      - name: OPA Policy Check (Conftest)
+        run: |
+          terraform show -json tfplan > plan.json
+          conftest test plan.json \
+            --policy "$GITHUB_WORKSPACE/policies" \
+            --all-namespaces
+        working-directory: ${{ matrix.stack }}
+
+      - name: Show Plan
+        run: terraform show -no-color tfplan > plan.txt
+        working-directory: ${{ matrix.stack }}
+
+      - name: Sanitize Stack Name
+        id: sanitize
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.stack }}" | sed 's/\//-/g')
+          echo "clean_stack=$CLEAN_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-plan-${{ steps.sanitize.outputs.clean_stack }}
+          path: ${{ matrix.stack }}/plan.txt
+
+  ai-infra-review:
+    needs: [detect, plan]
+    if: needs.detect.outputs.stacks != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        stack: ${{ fromJson(needs.detect.outputs.stacks) }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sanitize Stack Name
+        id: sanitize
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.stack }}" | sed 's/\//-/g')
+          echo "clean_stack=$CLEAN_NAME" >> $GITHUB_OUTPUT
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: tf-plan-${{ steps.sanitize.outputs.clean_stack }}
+          path: ./plan-output
+
+      - name: Get Infra Diff & Plan
+        run: |
+          # Get the git diff for this specific stack directory
+          git diff origin/${{ github.base_ref }}...HEAD -- ${{ matrix.stack }} > infra.diff
+          
+          # Combine the diff and the plan output into one context file
+          echo "### Git Diff for ${{ matrix.stack }}" > full_context.txt
+          cat infra.diff >> full_context.txt
+          
+          echo -e "\n### Terraform Plan Output for ${{ matrix.stack }}" >> full_context.txt
+          # Check if the plan artifact was downloaded and contains a plan file
+          if [ -d "./plan-output" ] && [ "$(ls -A ./plan-output)" ]; then
+            # Assuming the reusable workflow names the file 'plan.txt'
+            # Adjust if the filename is different
+            cat ./plan-output/*.txt >> full_context.txt || echo "No text plan file found in artifact." >> full_context.txt
+          else
+            echo "No plan artifact found for this stack. Proceeding with Git diff only." >> full_context.txt
+          fi
+
+      - name: Request AI Infra Analysis
+        run: |
+          jq -n --arg diff "$(<full_context.txt)" --arg model "qwen2.5-coder:7b" \
+            '{diff: $diff, model: $model}' > payload.json
+          
+          RESPONSE=$(curl -s -X POST https://1fe5-2409-4090-f00d-d402-1d83-ca5a-2cd6-6770.ngrok-free.app/analyze-infra \
+            -H "Content-Type: application/json" \
+            -d @payload.json)
+          
+          echo "$RESPONSE" | jq -r '.analysis' > infra_analysis.md
+
+      - name: Post Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const analysis = fs.readFileSync('infra_analysis.md', 'utf8');
+            if (analysis && analysis !== 'null' && analysis.trim() !== '') {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: "### AI Infrastructure Analysis 🏗️\n**Stack:** `${{ matrix.stack }}`\n\n" + analysis
+              });
+            } else {
+              console.log("No analysis content received or content was empty.");
+            }

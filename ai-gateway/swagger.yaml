@@ -6,7 +6,7 @@ info:
 servers:
   - url: http://localhost:3000
     description: Local server
-  - url: https://6cf3-2409-4090-f00d-d402-b8aa-ca5e-14f0-e51a.ngrok-free.app
+  - url: https://1fe5-2409-4090-f00d-d402-1d83-ca5a-2cd6-6770.ngrok-free.app
     description: Ngrok tunnel
 paths:
   /review-pr:
@@ -98,13 +98,19 @@ paths:
               properties:
                 diff:
                   type: string
-                  description: The IaC git diff.
+                  description: The IaC git diff content. May also include 'Terraform Plan Output' for enhanced analysis.
                   example: |
+                    ### Git Diff
                     resource "aws_s3_bucket" "data" {
                       bucket = "my-sensitive-data"
                     -  acl    = "private"
                     +  acl    = "public-read"
                     }
+                    
+                    ### Terraform Plan Output
+                    # aws_s3_bucket.data will be updated in-place
+                    ~ update in-place
+                      ~ acl = "private" -> "public-read"
                 model:
                   type: string
                   default: qwen2.5-coder:7b

@@ -52,6 +52,7 @@ jobs:
 ```
 
 #### AI Infra Review
+Reviews infrastructure changes (Terraform, CloudFormation, etc.) for security, cost, and reliability. **Supports Terraform Plan Output** for more accurate impact analysis when provided alongside the Git diff.
 ```yaml
 jobs:
   infra-review:
